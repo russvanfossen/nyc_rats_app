@@ -88,8 +88,10 @@ col1.metric("Failed inspections", f"{len(filtered):,}")
 col2.metric("Neighborhoods", filtered["nta"].nunique())
 
 # returned_objects=[] keeps panning/zooming from rerunning the whole script
-st_folium(build_map(filtered), use_container_width=True, height=600,
-          returned_objects=[])
+with st.spinner("Building map..."):
+    m = build_map(filtered)
+    st_folium(build_map(m, use_container_width=True, height=600,
+              returned_objects=[])
 
 with st.expander("Raw data"):
     st.dataframe(
