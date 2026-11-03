@@ -1,5 +1,8 @@
-import pandas as pd
+import time
+
 import folium
+import pandas as pd
+import requests
 import streamlit as st
 from folium.plugins import MarkerCluster
 from sodapy import Socrata
@@ -12,16 +15,40 @@ BATCH_SIZE = 50_000
 st.set_page_config(page_title="NYC Rat Inspections", layout="wide")
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def check_api(token):
+    """Fetch a single row to check that the API and the token work."""
+    url = f"https://data.cityofnewyork.us/resource/{DATASET_ID}.json"
+    headers = {"X-App-Token": token} if token else {}
+    start = time.time()
+    try:
+        r = requests.get(url, params={"$limit": 1}, headers=headers, timeout=10)
+    except requests.exceptions.Timeout:
+        return "error", "NYC Open Data didn't respond within 10 seconds."
+    except requests.exceptions.ConnectionError:
+        return "error", "Couldn't connect to NYC Open Data."
+
+    elapsed = time.time() - start
+    if r.status_code == 200:
+        if token:
+            return "ok", f"API OK, token accepted ({elapsed:.1f}s)"
+        return "warn", f"API OK, but no token found, so requests may be limited ({elapsed:.1f}s)"
+    if r.status_code == 403:
+        return "error", "The API rejected the token (403). Check NYCDATA_TOKEN in your secrets."
+    if r.status_code == 429:
+        return "error", "Too many requests (429). Try again in a few minutes."
+    return "error", f"Unexpected response: HTTP {r.status_code}"
+
+
 @st.cache_data(ttl=3600, show_spinner="Downloading inspection data...")
-def load_data(day_delta: int) -> pd.DataFrame:
+def load_data(day_delta: int, token) -> pd.DataFrame:
     """Pull failed rat inspections from the last `day_delta` days."""
     since = (pd.Timestamp("now") - pd.Timedelta(days=day_delta)).strftime(
         "%Y-%m-%dT%H:%M:%S.%f"
     )[:-3]
-    token = st.secrets.get("NYCDATA_TOKEN")
 
     batches, offset = [], 0
-    with Socrata("data.cityofnewyork.us", token, timeout=120) as client:
+    with Socrata("data.cityofnewyork.us", token, timeout=30) as client:
         while True:
             rows = client.get(
                 DATASET_ID,
@@ -70,7 +97,26 @@ def build_map(df: pd.DataFrame) -> folium.Map:
 st.sidebar.header("Filters")
 day_delta = st.sidebar.slider("Days to look back", 7, 90, 30)
 
-df = load_data(day_delta)
+# --- API check (stops the app early if the API or token is broken) ---
+token = st.secrets.get("NYCDATA_TOKEN")
+status, msg = check_api(token)
+if status == "ok":
+    st.sidebar.success(msg)
+elif status == "warn":
+    st.sidebar.warning(msg)
+else:
+    st.error(msg)
+    st.stop()
+
+# --- Load data ---
+t0 = time.time()
+try:
+    df = load_data(day_delta, token)
+except requests.exceptions.RequestException as e:
+    st.error(f"Downloading the data failed: {e}")
+    st.stop()
+print(f"load_data: {time.time() - t0:.1f}s")
+
 if df.empty:
     st.warning("No failed inspections found for that period.")
     st.stop()
@@ -89,9 +135,10 @@ col2.metric("Neighborhoods", filtered["nta"].nunique())
 
 # returned_objects=[] keeps panning/zooming from rerunning the whole script
 with st.spinner("Building map..."):
+    t0 = time.time()
     m = build_map(filtered)
-    st_folium(m, width=True, height=600,
-              returned_objects=[])
+    print(f"build_map: {time.time() - t0:.1f}s")
+    st_folium(m, use_container_width=True, height=600, returned_objects=[])
 
 with st.expander("Raw data"):
     st.dataframe(
