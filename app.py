@@ -138,11 +138,11 @@ with st.spinner("Building map..."):
     t0 = time.time()
     m = build_map(filtered)
     print(f"build_map: {time.time() - t0:.1f}s")
-    st_folium(m, use_container_width=True, height=600, returned_objects=[])
+    st_folium(m, width='stretch, height=600, returned_objects=[])
 
 with st.expander("Raw data"):
     st.dataframe(
         filtered[["inspection_date", "house_number", "street_name", "borough",
                   "nta", "result", "observations"]],
-        use_container_width=True,
+        width='stretch,
     )
